@@ -2,6 +2,7 @@ import struct
 from enum import Enum, unique
 from dataclasses import dataclass
 
+
 @unique
 class MessageType(Enum):
     NONE = 0
@@ -98,6 +99,7 @@ class HelloMessage(BaseMessage):
     """
     _type = MessageType.HELLO
 
+
     def __init__(self, host_name, job_name):
         """
         Create a new hello message type, for transmission
@@ -120,38 +122,120 @@ class HelloMessage(BaseMessage):
         """
         Pack this object into a bytearray for transmission.
         """
-        job_name_s = self.job_name.encode('utf-8')
-        host_name_s = self.host_name.encode('utf-8')
-        job_name_bytes = len(job_name_s)
-        host_name_bytes = len(host_name_s)
-        return struct.pack(
-            '!I' + str(job_name_bytes) + 'sI' + str(host_name_bytes) + 's',
-            job_name_bytes, job_name_s,
-            host_name_bytes, host_name_s
-        )
+        return serialize_string_list([self.host_name, self.job_name])
 
 
     @classmethod
     def from_msg_frame(cls, msgframe):
         """
         Deserialize a hello message from a message frame object.
-        data format is (length, string, length, string)
         """
-        uint32_t_size = struct.calcsize("!I")
-        job_name_bytes = struct.unpack_from("!I", msgframe.data, 0)[0]
-        job_name = struct.unpack_from(
-            str(job_name_bytes) + "s",
-            msgframe.data,
-            uint32_t_size
+        host_name, job_name = deserialize_string_list(msgframe.data)
+        return cls(host_name, job_name)
+
+
+class GoodbyeMessage(BaseMessage):
+    """
+    Message type for declaring that a job or host has stopped.
+    Not specifying a specific job name indicates that the host (and all jobs on
+    it) have terminated.
+    """
+    _type = MessageType.GOODBYE
+
+
+    def __init__(self, host_name, job_name=None):
+        self._host_name = host_name
+        self._job_name = job_name
+
+
+    @property
+    def host_name(self):
+        return self._host_name
+
+
+    @property
+    def job_name(self):
+        return self._job_name
+
+
+    def pack(self):
+        """
+        Pack this object into a bytearray for transmission.
+        """
+        if self.job_name is not None:
+            return serialize_string_list([self.host_name, self.job_name])
+        else:
+            return serialize_string_list([self.host_name])
+
+
+    @classmethod
+    def from_msg_frame(cls, msgframe):
+        """
+        Deserialize a goodbye  message from a message frame object.
+        """
+        strs = deserialize_string_list(msgframe.data)
+        if len(strs) == 2:
+            return cls(strs[0], strs[1])
+        else:
+            return cls(strs[0], None)
+
+
+class StatusChangeMessage(BaseMessage):
+    """
+    Message type for indicating some kind of run status change, such as
+    completion, failure, awaiting input, etc. Additionally, used to change
+    various attributes about the job/host, such as visibility.
+    """
+
+
+### Module-level helper functions (can you tell I'm a C programmer ??!?)
+
+
+def serialize_string_list(strs, do_pack=True):
+    """
+    Serialize a list of strings.
+    strs: strings to encode and serialize
+    do_pack: When True (default), returns a bytearray. When False, returns
+    the format string and the lengths + encoded strings, for use in packing.
+    """
+    fmt = '!'
+    pack_items = list()
+    for string in strs:
+        byte_str = string.encode('utf-8')
+        byte_str_len = len(byte_str)
+        pack_items.append(byte_str_len)
+        pack_items.append(byte_str)
+        if len(byte_str) > (2**32)-1:
+            raise RuntimeError("Way, WAY too big of a string passed in for serialization.")
+        fmt += 'I' + str(byte_str_len) + 's'
+
+    if do_pack:
+        return struct.pack(fmt, *pack_items)
+    else:
+        return fmt, byte_strs
+
+
+def deserialize_string_list(arr):
+    """
+    Deserialize a list of strings, in the format !IS...
+    arr: bytearray to decode.
+    returns: list of strings.
+    """
+    strings = list()
+    total_bytes = len(arr)
+    bytes_read = 0
+    uint32_t_size = struct.calcsize("!I")
+    while bytes_read < total_bytes:
+        next_str_len = struct.unpack_from("!I", arr, bytes_read)[0]
+        bytes_read += uint32_t_size
+        next_byte_str = struct.unpack_from(
+            str(next_str_len) + 's',
+            arr,
+            bytes_read
         )[0]
-        host_name_bytes = struct.unpack_from(
-            "!I",
-            msgframe.data,
-            uint32_t_size + job_name_bytes
-        )[0]
-        host_name = struct.unpack_from(
-            str(host_name_bytes) + "s",
-            msgframe.data,
-            2*uint32_t_size + job_name_bytes
-        )[0]
-        return cls(host_name.decode('utf-8'), job_name.decode('utf-8'))
+        bytes_read += next_str_len
+        strings.append(next_byte_str.decode('utf-8'))
+
+    return strings
+
+
