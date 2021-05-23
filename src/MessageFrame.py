@@ -186,6 +186,24 @@ class StatusChangeMessage(BaseMessage):
     completion, failure, awaiting input, etc. Additionally, used to change
     various attributes about the job/host, such as visibility.
     """
+    def __init__(self, host_name, job_name, update):
+        """
+        Create a new status change message.
+        update can be any pickle-able data.
+        """
+        self._host_name = host_name
+        self._job_name = job_name
+        self._update = update
+
+
+    @property
+    def host_name(self):
+        return self._host_name
+
+
+    @property
+    def job_name(self):
+        return self._job_name
 
 
 ### Module-level helper functions (can you tell I'm a C programmer ??!?)

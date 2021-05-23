@@ -8,22 +8,29 @@ from MessageFrame import *
 import shlex
 import select
 import os
-from time import sleep
+from collections import namedtuple
+
+subscriber_t = namedtuple('subscriber_t', ('user_id', 'chat_id', 'events'))
+job_t = namedtuple('job_t', ('host_name', 'job_name'))
 
 
-class RemoteJobMap:
+
+class JobUpdateDB:
     """
-    fancy dictionary
+    map of workers -> status updates
+    map of workers -> who is subscribed
+    list of subscribers & interest lists
     """
 
 
     def __init__(self):
-        ...
+        self._subscribers = list()
+        self._jobs_on_host = dict()
 
 
     @property
     def hosts(self):
-        ...
+        return self._jobs_on_host.keys()
 
 
     def active_jobs(self, on_host):
@@ -32,15 +39,6 @@ class RemoteJobMap:
 
     def exited_jobs(self, on_host):
         ...
-
-
-    def request_caching(self, on_host, for_job):
-        ...
-
-
-    def flush_cache(self, on_host, for_job):
-        ...
-
 
 
 class ThreadingLocalServer(ThreadingMixIn, TCPServer):
@@ -135,7 +133,7 @@ def main():
         BOT_TOKEN = f.readline().strip()
 
 
-    job_map = RemoteJobMap()
+    # job_map = RemoteJobMap()
     
     tg_updater = Updater(BOT_TOKEN)
     tg_dispatcher = tg_updater.dispatcher
