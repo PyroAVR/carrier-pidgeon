@@ -8,37 +8,7 @@ from MessageFrame import *
 import shlex
 import select
 import os
-from collections import namedtuple
-
-subscriber_t = namedtuple('subscriber_t', ('user_id', 'chat_id', 'events'))
-job_t = namedtuple('job_t', ('host_name', 'job_name'))
-
-
-
-class JobUpdateDB:
-    """
-    map of workers -> status updates
-    map of workers -> who is subscribed
-    list of subscribers & interest lists
-    """
-
-
-    def __init__(self):
-        self._subscribers = list()
-        self._jobs_on_host = dict()
-
-
-    @property
-    def hosts(self):
-        return self._jobs_on_host.keys()
-
-
-    def active_jobs(self, on_host):
-        ...
-
-
-    def exited_jobs(self, on_host):
-        ...
+from BidirectionalMap import BidirectionalMap
 
 
 class ThreadingLocalServer(ThreadingMixIn, TCPServer):
@@ -46,15 +16,27 @@ class ThreadingLocalServer(ThreadingMixIn, TCPServer):
     # def handle_error(self, request, client_address):
         # ...
 
-class TaskUpdateRequestHandler(BaseRequestHandler):
 
-    def __init__(self, *args, **kwargs):
+class TaskUpdateRequestHandler(BaseRequestHandler):
+    """
+    Handle data from a connected remote task and enqueue messages to interested
+    users when updates have occurred from the connected task.
+    """
+
+    def __init__(self, int_list, bot=None, *args, **kwargs):
+        """
+        int_list: BidriectionalMap, user <-> interest set mapping
+        """
         super().__init__(*args, **kwargs)
-        self._tg_bot = None
+        self._int_list = int_list
+        self._tg_bot = bot
 
 
     @property
     def tg_bot(self):
+        """
+        Instance of a telegram.bot which will be used to send updates.
+        """
         return self._tg_bot
 
 
@@ -69,9 +51,11 @@ class TaskUpdateRequestHandler(BaseRequestHandler):
         socket = self.request
         socket.setblocking(False)
         fd = socket.fileno()
+        # TODO better timeout. heartbeat message to prevent killing the thread.
         ep = select.epoll(1)
         ep.register(fd, select.EPOLLIN | select.EPOLLET | select.EPOLLEXCLUSIVE)
-        while True:
+        should_continue = True
+        while should_continue:
             events = ep.poll(-1)
             while True:
                 header = socket.recv(MessageFrame.header_len)
@@ -86,23 +70,34 @@ class TaskUpdateRequestHandler(BaseRequestHandler):
                     epoll.close()
                     raise RuntimeError(f"Got an incomplete message from {socket.getpeername()}. Bailing out!")
 
-                self.decode_and_process(msg)
+                should_continue = self.decode_and_process(msg)
 
 
     def decode_and_process(self, msg):
+        """
+        return: Whether or not we should close the connection. True if we should
+        continue listening.
+        """
+        r = True
         if msg.type == MessageType.HELLO.value:
             hmsg = HelloMessage.from_msg_frame(msg)
             print(f'got HELLO from {hmsg.host_name}:{hmsg.job_name}')
+            self._int_list.create_island_b((hmst.host_name, hmsg.job_name))
             # global bot
             # global chat
             # bot.send_message(chat, text=f'got HELLO from {hmsg.host_name}:{hmsg.job_name}')
 
-        if msg.type == MessageType.GOODBYE.value:
+        elif msg.type == MessageType.GOODBYE.value:
             gmsg = GoodbyeMessage.from_msg_frame(msg)
             if gmsg.job_name is not None:
                 print(f'got GOODBYE from {gmsg.host_name}:{gmsg.job_name}')
             else:
                 print(f'got GOODBYE from {gmsg.host_name}')
+
+
+            r = False
+
+        return r
 
 
 bot, chat = None, None
@@ -133,7 +128,7 @@ def main():
         BOT_TOKEN = f.readline().strip()
 
 
-    # job_map = RemoteJobMap()
+    user_int_list = BidirectionalMap()
     
     tg_updater = Updater(BOT_TOKEN)
     tg_dispatcher = tg_updater.dispatcher
